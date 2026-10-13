@@ -1,0 +1,11 @@
+dist/
+coverage/
+node_modules/
+.plugin-build/
+.tunnel/
+package-lock.json
+
+# Byte-for-byte copies of files Steam wrote. Reformatting them would defeat
+# their purpose: they exist to pin the exact quirks of Steam's own output
+# (concatenated JSON documents, stringified inner JSON, tab-indented VDF).
+test/fixtures/

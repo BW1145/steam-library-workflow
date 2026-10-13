@@ -1,0 +1,504 @@
+# steam-mcp
+
+<img src="assets/logo.png" alt="A cheerful game library mascot holding three colorful fantasy game cards" width="180" />
+
+[![CI](https://github.com/sjmatta/steam-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/sjmatta/steam-mcp/actions/workflows/ci.yml)
+
+A local MCP server for the Steam desktop client on Windows and macOS: browse and filter your library, and
+**read and write library collections** — the thing Steam exposes no web API for.
+
+Collections live only inside the running Steam client and in Steam Cloud. This server reaches them
+by driving Steam's own Chromium debugger (`SharedJSContext`), where the library UI keeps
+`collectionStore`, `appStore` and `SteamClient`.
+
+> **Steam terms and account risk:** This is an unofficial project that uses undocumented Steam
+> client internals through the CEF debugger. The [Steam Subscriber Agreement](https://store.steampowered.com/subscriber_agreement/)
+> contains restrictions on reverse engineering and tampering. It is unclear whether this tool's
+> use of the debugger is permitted under Valve's terms. Review the current terms and decide whether
+> to use it with your account; Valve has not endorsed this project.
+
+## Requirements
+
+- Windows or macOS with Node LTS 24 (see `.nvmrc`)
+- Steam installed and signed in
+- For collection writes: Steam running with CEF debugging enabled (the `steam_restart` tool does this)
+
+## Windows setup
+
+Install the locked dependencies and build with Node 24. Set `STEAM_ROOT` to the directory containing `Steam.exe`, and `STEAM_ACCOUNT_ID` to the selected numeric userdata directory. `STEAM_DEBUG_PORT=8081` selects the local debugger port. `STEAM_MCP_CACHE_DIR` selects the local cache and backup directory. The `.env` file remains local to this checkout.
+
+Windows startup uses `Steam.exe -cef-enable-debugging -devtools-port 8081`; normal shutdown uses `Steam.exe -shutdown`. The server reads process metadata through PowerShell. Reads and collection mutations reuse the same CDP programs as macOS.
+
+`npm run tool -- steam_status` calls the server through MCP stdio. The helper accepts a tool name, JSON arguments and an optional output filename. Select the intended Node/Python executable explicitly when another application's virtual environment appears first in PATH.
+
+## Set up
+
+This project currently runs from a source checkout; it is not published to npm.
+Each user needs their own checkout on the computer that runs Steam.
+Windows installations use `STEAM_ROOT` to select the Steam folder. Start read-only; a Steam Web API key is optional.
+
+Clone the repository, install the locked dependencies, and build the server:
+
+```bash
+git clone https://github.com/sjmatta/steam-mcp.git
+cd steam-mcp
+nvm install # if you use nvm; otherwise install Node 22.22.1+ and skip this line
+npm ci
+npm run build
+npm run smoke
+```
+
+The smoke check should report `23 tools`. It uses no real Steam client and makes no Steam changes.
+Choose one connection method below; use only one Steam MCP server process at a time.
+
+| Client                             | Connection method                                            |
+| ---------------------------------- | ------------------------------------------------------------ |
+| Claude Code                        | [Stdio registration](#claude-code)                           |
+| Other local MCP clients            | [Stdio configuration](#other-local-mcp-clients)              |
+| ChatGPT Desktop local Work / Codex | [Local Desktop plugin](#local-desktop-plugin-work-and-codex) |
+| ChatGPT Chat mode                  | [Secure MCP Tunnel](#secure-mcp-tunnel-for-chat-mode)        |
+
+### Claude Code
+
+Register with Claude Code from the repository root. This starts in read-only mode:
+
+```bash
+claude mcp add steam -- node "$(pwd)/dist/index.js"
+```
+
+Restart your MCP client, then call `steam_status` to see which data sources are available. Local
+library reads work without an API key. To use the Steam Web API while Steam is closed, configure
+`STEAM_API_KEY` in the MCP client's environment. To opt into collection writes, register the server
+with `-e STEAM_MCP_ALLOW_WRITES=1` and enable CEF debugging through `steam_restart`. For example,
+remove the read-only registration and add it again with your chosen settings:
+
+```bash
+claude mcp remove steam
+claude mcp add steam -e STEAM_MCP_ALLOW_WRITES=1 -- node "$(pwd)/dist/index.js"
+```
+
+The `.env.example` file lists available variables. The Desktop plugin described below loads the
+checkout's `.env`; other clients must pass values through their configuration or process
+environment. Keep API keys out of Git.
+
+### Other local MCP clients
+
+For clients that accept `mcpServers` JSON, add this entry to the client's MCP configuration.
+Replace both paths with absolute paths from your machine. Run `command -v node` in the terminal
+where you built the server to find the Node executable; GUI clients may not load nvm or your shell's PATH.
+
+```json
+{
+  "mcpServers": {
+    "steam": {
+      "command": "/absolute/path/to/node",
+      "args": ["/absolute/path/to/steam-mcp/dist/index.js"],
+      "env": {
+        "STEAM_MCP_ALLOW_WRITES": "0"
+      }
+    }
+  }
+}
+```
+
+To load a private `.env`, prepend `--env-file-if-exists=/absolute/path/to/steam-mcp/.env`
+to `args`, before the server path. To enable collection edits, change the write setting to `1`
+and restart the MCP connection. Explicit environment settings override values in `.env`.
+
+### Local Desktop plugin (Work and Codex)
+
+Install [Task](https://taskfile.dev/), nvm, and the Codex CLI with plugin commands available
+(`codex plugin --help`), then run from this checkout:
+
+```bash
+task install       # nvm install, then npm ci with the pinned Node LTS
+task plugin:setup  # configure, build, verify, and install for local Work/Codex
+```
+
+`plugin:setup` is safe to rerun. It creates a private, ignored `.env` with mode `0600` from an
+existing standalone `steam` MCP registration, if present. An existing `.env` is preserved.
+Without a registration, it defaults to read-only; edit `.env` to set
+`STEAM_MCP_ALLOW_WRITES=1` when you want collection edits. Optional API keys also go in `.env`.
+Inherited environment variables take precedence over the `.env` values.
+
+The task generates a local marketplace and plugin under ignored `.plugin-build/`, registers
+`steam-local`, and installs `steam@steam-local` with the Codex CLI. The package contains the
+manifest, logo, and MCP launch configuration, with absolute paths to this checkout and nvm's
+Node executable. Credentials remain outside the package. Keep the checkout in place; rerun setup
+after moving it, changing Node versions, or updating the plugin. To select a different CLI path,
+run `task plugin:setup CODEX_BIN=/absolute/path/to/codex`.
+
+After successful installation, setup disables the old standalone `steam` registration while
+retaining its settings. This prevents two server processes from independently driving Steam's
+debugger. It leaves other MCP servers and plugins alone.
+
+Restart ChatGPT Desktop, switch to **Work on this Mac** or **Codex**, open Plugins, and find
+**Steam Library** under **Steam Local**. Select it in a new conversation and ask it to call
+`steam_status` before trying collection changes. OpenAI documents local marketplaces for Work
+and Codex. This installation does not register a hosted ChatGPT app and has not exposed Steam's
+tools to Chat mode in our verification. This local plugin requires the Mac.
+See OpenAI's [local plugin packaging instructions](https://developers.openai.com/plugins/build/plugins).
+
+For **Chat mode**, use a registered ChatGPT developer-mode MCP connection. The documented
+private-server route is [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels):
+create a tunnel in Platform tunnel settings, associate it with the target ChatGPT account/workspace,
+run `tunnel-client` on this Mac against the stdio server, then create a ChatGPT plugin connection
+with **Connection → Tunnel**. This needs a tunnel ID and a runtime API key. Neither the local plugin
+installation nor a successful local handshake completes that account-side setup.
+
+### Secure MCP Tunnel for Chat mode
+
+Create a tunnel in [Platform tunnel settings](https://platform.openai.com/settings/organization/tunnels)
+and associate it with your ChatGPT workspace. Initialize this checkout with its ID:
+
+```bash
+TUNNEL_ID=tunnel_your_id task tunnel:setup
+```
+
+Setup downloads the latest official Mac `tunnel-client` if absent, verifies its SHA-256 against
+the release checksum file, builds Steam, and generates a private local profile. The tunnel ID
+is retained in ignored `.tunnel/tunnel-id`, so later runs need only `task tunnel:setup`.
+Use `task tunnel:download` to update the binary to the latest release.
+
+Create a **runtime API key**, not an admin key, whose principal has **Tunnels Read + Use**.
+Save only the key text to `.tunnel/runtime-api-key`; the task uses a `file:` reference and never
+puts the credential in command arguments, the profile, or the plugin package. One way to enter
+it without displaying it or placing it in shell history is:
+
+```bash
+task tunnel:key  # hidden prompt; saves the key with permissions 0600
+task tunnel:doctor
+task tunnel:start
+task tunnel:status
+```
+
+`tunnel:start` uses the client's managed runtime supervisor with the alias `steam-chat` and
+disables duplicate local Steam registrations. Restart Desktop to release already-running local
+plugin processes before calling Steam through Chat. The health UI stays on loopback, and MCP
+requests are dispatched one at a time. Check the status output's process, health, and readiness
+fields; an existing tunnel or profile alone does not mean the connection is running.
+
+While the tunnel is healthy, open ChatGPT Plugins in developer mode, create a connection named
+**Steam Library**, and choose **Connection → Tunnel** with your saved tunnel ID. Verify that
+discovery finds all 23 tools. Select that connection in a new Chat-mode conversation and call
+`steam_status` to establish end-to-end availability. Keep this Mac and the tunnel running for
+each ChatGPT tool call. `task tunnel:stop` stops the local runtime without deleting the remote
+tunnel. Avoid running local Work/Codex Steam tools and the tunnel simultaneously.
+
+Useful tasks:
+
+- `task plugin:build`: build the server and generate the package, without installing it.
+- `task plugin:check`: start the generated plugin command and verify all 23 tool schemas and the
+  writes-disabled guard, without accessing the real Steam install.
+- `task plugin:install`: build, verify, and install or refresh the package, preserving `.env`.
+- `task check` and `task smoke`: run the repository checks or verify the server handshake.
+
+The plugin's private `.env` is separate from the retained standalone registration. Change `.env`
+to adjust plugin settings; restarting the plugin is required for runtime changes.
+
+## First use
+
+After connecting, ask your assistant:
+
+- "Call steam_status and tell me which Steam features are available."
+- "Show my installed games, sorted by playtime."
+- "Find Portal in my library and show its details."
+- "List my Steam collections."
+
+For collection changes, opt into writes in your connection's environment, restart the connection,
+then call `steam_status`. If debugging is unavailable, close any game and ask the assistant to
+preview `steam_restart` with `confirm: true, dry_run: true`. Approve the restart before it runs
+without `dry_run`; this closes and reopens Steam.
+
+For a first edit, ask: "Preview creating a static collection called MCP Trial with Portal in it.
+Use steam_library_search to resolve the appid, then steam_collection_create with dry_run: true.
+Show me the proposed change and wait before applying it." After applying an approved change,
+check the returned verification and the Steam library UI. Dynamic collections cannot be edited.
+Uninstall and install tools open Steam dialogs; finish those dialogs yourself.
+
+## Troubleshooting
+
+| Symptom                                                      | Next step                                                                                                                                                      |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `node` not found or incompatible Node version                | Install Node 22.22.1+; with nvm, run `nvm install` here. GUI clients need an absolute Node path.                                                               |
+| Missing `dist/index.js`                                      | Run `npm ci` and `npm run build` from the checkout.                                                                                                            |
+| `NO_ACCOUNT`                                                 | Sign in to Steam at least once. For multiple accounts, set `STEAM_ACCOUNT_ID` to the numeric `userdata/<id>` directory name, not your SteamID64.               |
+| `WRITES_DISABLED`                                            | Set `STEAM_MCP_ALLOW_WRITES=1` in the active connection, then restart that connection.                                                                         |
+| `STEAM_NOT_RUNNING` or `DEBUG_PORT_CLOSED`                   | Call `steam_status`, then preview and approve `steam_restart` when no game is running.                                                                         |
+| `PORT_OCCUPIED`                                              | Set `STEAM_DEBUG_PORT` to a free port such as `8081`, restart the MCP connection, then retry `steam_restart`.                                                  |
+| `STORES_NOT_READY`                                           | Open Steam's Library, wait for it to finish loading, and retry.                                                                                                |
+| Library reads lag recent changes                             | Call `steam_cache_refresh` with `library: true`. A degraded result may use a cached snapshot up to 24 hours old; local collection files also lag live changes. |
+| Offline library is incomplete or wishlist needs a key        | Configure your own optional `STEAM_API_KEY`; local files alone cannot enumerate every owned game.                                                              |
+| Plugin or tunnel appears installed but tools are unavailable | Restart Desktop for local plugins; for tunnels, check `task tunnel:status` and the workspace association described above.                                      |
+
+If Steam updates break a tool, include the tool name, error code, macOS/Steam versions,
+and sanitized `steam_status` output in a [GitHub issue](https://github.com/sjmatta/steam-mcp/issues).
+Remove API keys, account identifiers, local paths, and private library details before sharing logs.
+
+## Update or disconnect
+
+To update, quit the active MCP connection, then run `git pull --ff-only`, `npm ci`,
+`npm run build`, and `npm run smoke` from the checkout. Restart the client afterward.
+For a local plugin, rerun `task plugin:setup`; for a tunnel, stop it before updating and
+rerun `task tunnel:setup` and `task tunnel:start` afterward.
+
+For Claude Code, `claude mcp remove steam` removes the registration. In other clients,
+remove or disable the Steam MCP entry or plugin. `task tunnel:stop` stops the local tunnel;
+remove its ChatGPT connection separately if desired. Tunnel setup disables local Steam
+registrations; stopping the tunnel does not automatically re-enable them.
+
+## Configuration
+
+| Variable                 | Default              | Meaning                                                                                                                                                            |
+| ------------------------ | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `STEAM_MCP_ALLOW_WRITES` | unset (off)          | Master switch for every mutation. Without it, writes return `WRITES_DISABLED`.                                                                                     |
+| `STEAM_DEBUG_PORT`       | `8080,8081`          | Comma-separated ports to probe. The first is what `steam_restart` asks Steam to bind.                                                                              |
+| `STEAM_API_KEY`          | unset                | Steam Web API key ([get one](https://steamcommunity.com/dev/apikey); any domain works locally). Enables the full owned library and wishlist while Steam is closed. |
+| `STEAM_ACCOUNT_ID`       | auto                 | Override account detection (the `userdata/<id>` directory name).                                                                                                   |
+| `STEAM_MCP_CACHE_DIR`    | `~/.cache/steam-mcp` | Cache and collection backups.                                                                                                                                      |
+
+### The debug port
+
+Steam's debugger defaults to `127.0.0.1:8080`. If something else already holds that port, Steam
+binds nothing at all and debugging silently fails.
+
+If port 8080 is occupied, set `STEAM_DEBUG_PORT=8081` (or another free port) in the MCP client's
+environment. The server probes `8080,8081` by default, but `steam_restart` asks Steam to bind the
+first configured port.
+
+`steam_status` names whatever is squatting the port, and `steam_restart` refuses _before_ quitting
+Steam if the target port is occupied, so a failed restart never leaves you with Steam closed.
+
+## Tools
+
+### Status and lifecycle
+
+- **`steam_status`** — client state, debugger reachability, available sources, per-capability
+  availability with reasons. Never throws; call it first when something is unavailable.
+- **`steam_restart`** — quit Steam and relaunch it with debugging, then wait for the library UI.
+  Requires `confirm: true`, and refuses if a game is running unless `allow_interrupt_game: true`.
+
+### Library
+
+- **`steam_library_list`** — filter by installed/played/hidden/favorite/collection/tag/kind,
+  playtime, last played, size, review score. Sorted, paginated, projected.
+- **`steam_library_search`** — fuzzy name search; use it to turn names into appids.
+- **`steam_game_details`** — one game across all sources, plus store metadata and review score.
+- **`steam_tags_list`**, **`steam_recently_played`**, **`steam_wishlist`**
+
+### Collections
+
+- **`steam_collections_list`**, **`steam_collection_get`**
+- **`steam_collection_create`** — resolve-or-reuse by name (see Safety)
+- **`steam_collection_add_games`**, **`steam_collection_remove_games`**,
+  **`steam_collection_replace_games`**
+- **`steam_collection_rename`**, **`steam_collection_delete`**
+- **`steam_set_favorite`**, **`steam_set_hidden`**
+
+### Installs and cache
+
+- **`steam_install_game`**, **`steam_uninstall_game`** — these open Steam's wizard. There is no
+  silent install API; a dialog must be clicked through by hand.
+- **`steam_cache_refresh`**, **`steam_cache_clear`**, **`steam_cache_status`**
+
+## How data is sourced
+
+|                   | Steam running               | Steam closed                                  |
+| ----------------- | --------------------------- | --------------------------------------------- |
+| Library           | live client (authoritative) | Web API (with key) + local files              |
+| Collections       | live client                 | `cloud-storage-namespace-1.json`, read-only   |
+| Collection writes | ✅                          | ❌ `STEAM_NOT_RUNNING` → call `steam_restart` |
+
+Reads degrade gracefully and set `degraded: true`. Writes never do — they fail with an actionable
+error instead.
+
+Installed-state comes from Steam's `local-install` collection, never from `overview.installed`,
+which is true for most of a library and actually means "installable".
+
+## Safety
+
+- **Steam mutations and cache clear take `dry_run`.** They report the proposed delta — which appids would be
+  added, removed, or lose their membership — and changes nothing. Use it before anything bulk.
+- **Unknown arguments are rejected, not ignored.** Tool schemas are strict, so `dryrun`,
+  `dry-run`, `appid` (for `appids`), or any other typo fails loudly. Without this the SDK silently
+  _strips_ unrecognized keys, which means a mistyped `dry_run` on a destructive tool performs the
+  real operation — that is not hypothetical, it deleted a collection during development.
+- **Library edits and install/uninstall dialogs are off by default** (`STEAM_MCP_ALLOW_WRITES`).
+  Restarting Steam has a separate `confirm: true` guard; cache refresh/clear manage this server's cache
+  and do not require the library write switch.
+- **No offline collection writes.** Editing `cloud-storage-namespace-1.json` directly would mean
+  reimplementing Valve's `union-collections` merge semantics and two-level version counters, and a
+  mistake propagates to Steam Cloud. Writes go through the running client, which does it correctly.
+- **Dynamic collections are refused.** Steam recomputes filter-based collections, so manual edits
+  are silently reverted — the worst possible failure mode.
+- **Create never blind-creates.** Steam _deletes_ a same-named collection when saving a new one, so
+  `steam_collection_create` resolves by name first and reuses.
+- **Every write is verified by re-reading** the collection in the same evaluation; tools report
+  what actually happened, not what was intended.
+- **Steam is never force-killed.** It writes collections on exit; `steam_restart` uses AppleScript
+  quit and fails loudly rather than escalating.
+- **Collection files are backed up** to `~/.cache/steam-mcp/backups/` before the first mutation.
+  Note these are Steam's _flushed_ files, which lag the running client — a backup can be missing
+  the newest membership changes, so treat it as a recovery aid, not a perfect snapshot.
+- **Deleting a collection loses its id.** Recreating produces a new one. Steam Cloud may merge the
+  old membership back in on the next sync (`union-collections`), so verify the result.
+- Collection ids are opaque and may contain `+` and `*` (`uc-8qBpJj1*+Borh`) — pass them back verbatim.
+
+## Concurrency
+
+Steam's CEF IPC crashes the whole Steam UI ("Collided with existing master response stream") if two
+clients evaluate against the same target at once. Every evaluation goes through one promise chain in
+`src/cdp/client.ts`; on timeout the socket is destroyed rather than reused, because a timed-out
+evaluation is still running in the page and its late reply would collide with the next one.
+
+## Development
+
+```bash
+npm run build         # tsc -> dist/
+npm run typecheck     # src, tests and configs
+npm test              # unit suite (fast, hermetic)
+npm run test:coverage
+npm run lint          # eslint, type-aware
+npm run format        # prettier --write
+npm run deps          # knip: unused/undeclared dependencies, dead exports
+npm run secrets:check # scan tracked files for likely credentials
+npm run smoke         # build, then boot the server and speak MCP to it
+npm run check         # everything above except build, coverage and smoke
+```
+
+### CI
+
+`.github/workflows/ci.yml` runs on pushes to `main`, pull requests, and on demand.
+Node 22 (the `engines` floor) and 24 on Linux, plus Node 24 on macOS — the only
+platform the server supports, so that the day the unit suite stops being
+platform-independent is the day CI says so.
+
+Beyond `npm run check`, three steps assert things a type check and unit tests
+structurally cannot:
+
+- **The unit suite is hermetic** — re-run with `STEAM_ROOT=fixture-unavailable-steam`. The
+  suite claims no network, no real Steam install, no writes outside a temp
+  directory; this is what keeps the claim honest instead of merely stated.
+- **The built page programs carry no compiler helpers** — a `__spreadArray` in
+  that emit is an unresolvable identifier inside Steam's page. It exists only in
+  built output, so nothing else in the pipeline can see it.
+- **The server boots and stdout carries only JSON-RPC** (`scripts/smoke-stdio.mjs`).
+  Unit tests import modules directly and never start the binary, so a broken
+  registration or a stray `stdout` write would pass everything else and fail only
+  once a client connected. Verified to fail on an injected stray write.
+
+There is **no deployment job and no integration job**. The integration suite
+needs a real, logged-in Steam desktop client to drive over CEF; no hosted runner
+has one. Those stay opt-in and local.
+
+Pull requests also run `.github/workflows/dependency-review.yml` to catch newly
+introduced vulnerable dependencies. `.github/workflows/codeql.yml` scans
+TypeScript and GitHub Actions workflows on pushes, pull requests, and weekly.
+
+### Git hooks
+
+Installed by `npm install` (husky `prepare`).
+
+| Hook         | Runs                                                                                         | Why there                                                     |
+| ------------ | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `pre-commit` | `scripts/check-secrets.mjs --staged`, then `lint-staged` (prettier + eslint on staged files) | Fast enough to not be resented; touches only what you staged. |
+| `pre-push`   | `npm run check`                                                                              | The slow, whole-repo gate.                                    |
+
+`pre-push` deliberately does **not** run the integration suite: it drives the real
+Steam client and would quit and relaunch it underneath whoever is pushing.
+
+**The secret guard** protects against accidentally committing Steam Web API
+keys. Such a key is a bare 32-character uppercase hex
+string — nothing about it looks like a credential in a diff, so it has to be
+matched by shape. The pre-commit hook scans staged content, while `npm run check`
+scans tracked and new files. Findings report file locations without printing possible
+credentials. This is a heuristic guard; review changes before publishing.
+
+### Linting
+
+Type-aware `typescript-eslint`, calibrated rather than adopted wholesale. Two
+rules earn their place for reasons specific to this server:
+
+- **`no-console` (allowing only `error`)** and a ban on `process.stdout` — stdout
+  is the MCP protocol channel, and anything written there corrupts the JSON-RPC
+  stream. `src/index.ts` is the one file permitted to name the other console
+  methods, because it reassigns them to stderr.
+- **`no-restricted-syntax` on `src/cdp/programs/*`** — a value `import` in a page
+  program becomes an identifier Steam's page cannot resolve. `auditPageFunction`
+  catches this at runtime; the lint rule catches it while you type.
+
+`src/cdp/programs/*` is also the only place where the `no-unsafe-*` rules are
+off. Everything those functions touch is Valve's, undeclared, and reshaped by
+Steam updates without notice; there is nothing to type against, and inventing
+declarations would assert a contract we cannot enforce.
+
+### Tests
+
+Two suites with different contracts.
+
+**Unit** (`test/unit`, ~350 tests, runs in ~2s). Hermetic: no network, no real Steam
+install, no writes outside a temp directory. It passes with `STEAM_ROOT=fixture-unavailable-steam`,
+which is the check that keeps it honest. Steam's local files are represented by a
+fixture tree in `test/fixtures/steam` that encodes every format quirk we hit — the
+duplicate `apps` node in `localconfig.vdf`, tombstoned collections, opaque ids
+containing `+` and `*`, a partially-downloaded `.acf`, and librarycache files holding
+concatenated JSON documents.
+
+`test/helpers/fake-steam.ts` is a faithful fake of `collectionStore` / `appStore` /
+`SteamClient`. Faithful is the point: it reproduces Steam's real semantics, including
+that `AddOrRemoveApp` takes raw appids and filters only `undefined`, that
+`SaveCollection` deletes a same-named collection, and that `AsDragDropCollection()`
+returns null for dynamic collections. A page program that would misbehave against the
+real client misbehaves here too.
+
+**Integration** (`test/integration`) drives the real client and is opt-in:
+
+```bash
+STEAM_MCP_E2E=1 npm run test:e2e                          # reads + restart guards
+STEAM_MCP_E2E=1 STEAM_MCP_E2E_WRITES=1 npm run test:e2e   # + real collection writes
+```
+
+Write tests only ever touch collections named `zz-steam-mcp-test-<timestamp>` — unique
+per run, so they can never collide with a real collection and trigger Steam's same-name
+deletion. They refuse to start if a stray scratch collection exists, clean up in
+`afterAll`, and assert that no pre-existing collection changed. The suite establishes
+its own Steam state rather than assuming it.
+
+### What the tests are protecting
+
+Each of these is a bug that reached the real library before a test existed for it:
+
+| Guard                                                                | Test                                                          |
+| -------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Concurrent evaluations crash the Steam UI                            | `cdp-queue` — 12 parallel calls, peak concurrency must stay 1 |
+| A timed-out evaluation must destroy the socket, not release the lock | `cdp-queue` — asserts the destroy callback fires              |
+| Creating a collection must reuse a same-named one, never replace it  | `page-programs`, and again live in `live-write`               |
+| Flag APIs take raw appids; overviews silently no-op or crash         | `page-programs` — round-trips the flag and reads it back      |
+| A dry run must project the delta, not report "no change"             | `page-programs`, `tools`                                      |
+| Unknown tool arguments must be rejected, not stripped                | `tools` — `dryrun`, `dry-run`, `appid`, `force`               |
+| Writes must fail closed without `STEAM_MCP_ALLOW_WRITES`             | `tools` — every mutating tool                                 |
+| `installed` comes from `local-install`, not `overview.installed`     | `merge`, and live agreement with `.acf` in `live-read`        |
+| Steam must never be force-killed                                     | `steam-process` — asserts no signal is ever sent              |
+
+Two of these were verified by reintroducing the original bug and confirming the suite
+goes red.
+
+**Dry runs cannot substitute for real writes.** The favorite/hidden tools were silently
+no-ops for a while precisely because they were only ever exercised with `dry_run`; a
+preview never calls the API it is previewing. Anything that flips a bit needs a
+round-trip test that reads it back.
+
+Offline assertions check invariants, not exact counts: this runs against a live library
+that legitimately changes as games are installed, played, hidden and re-categorised.
+
+### In-page programs
+
+`src/cdp/programs/*.ts` are shipped to Steam via `Function.prototype.toString()`. They
+must not reference module scope and must return plain JSON. `tsconfig.json` targets
+ES2023 with `importHelpers: false` so `tsc` emits no helpers, and
+`auditPageFunction` (exercised over every program in `cdp-expression`) fails the build
+if a helper or closure capture ever appears.
+
+Every page program belongs in that directory, including one-liners. The audit sweeps
+the module, so a program defined anywhere else is one the guard never sees — which is
+exactly what had happened to `collectionMembers`, previously defined in `model.ts`.

@@ -1,0 +1,17 @@
+# 本机配置与个人数据
+.steam-workflow.local.json
+mcp.local.json
+state/
+data/
+output/
+.steam-mcp-cache/
+release/
+NEXT.md
+WORK_LOG.md
+__pycache__/
+*.pyc
+steam-mcp/.env
+steam-mcp/node_modules/
+steam-mcp/dist/
+steam-mcp/.plugin-build/
+steam-mcp/.tunnel/

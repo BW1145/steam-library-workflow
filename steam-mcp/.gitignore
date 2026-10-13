@@ -1,0 +1,15 @@
+node_modules/
+dist/
+coverage/
+.cache/
+.plugin-build/
+.tunnel/
+
+.env
+.env.*
+!.env.example
+.codex/
+*.log
+*.tsbuildinfo
+
+.DS_Store
