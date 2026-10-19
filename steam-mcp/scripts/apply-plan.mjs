@@ -171,6 +171,8 @@ try {
         });
         save();
         if (!dry) assert.equal(info.dynamic, false);
+        if (original.name !== action.name)
+          await call("steam_collection_rename", { id, new_name: action.name, dry_run: dry });
         if (dry) {
           receipt.collections.push({ id, name: action.name, expected_appids: desired });
           continue;

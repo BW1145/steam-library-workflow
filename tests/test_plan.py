@@ -34,6 +34,15 @@ class PlanTests(unittest.TestCase):
         self.assertNotIn('remove_appids', action)
         self.assertNotIn('add_appids', action)
 
+    def test_dynamic_rename_keeps_target_name_and_original_id(self):
+        existing = [{'id': 'uc-original', 'name': '策略', 'dynamic': True,
+                     'appids': [1, 99], 'storage': {}}]
+        action = collection_action('战术指挥', {2}, existing, {1, 2}, 'type', previous_name='策略')
+        self.assertEqual(action['action'], 'review_dynamic_migration')
+        self.assertEqual(action['name'], '战术指挥')
+        self.assertEqual(action['id'], 'uc-original')
+        self.assertEqual(action['scope_appids'], [2])
+
     def test_unapproved_category_remains_pending(self):
         self.assertEqual(collection_action('MOBA', {1}, [], {1}, 'type', False)['status'], 'category_pending')
 
