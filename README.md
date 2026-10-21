@@ -38,3 +38,13 @@ AI依据实际玩法和用户偏好判断分类，本地 Steam MCP 负责读取�
 Steam 读写基于客户端调试接口，需要本地 Steam 正常登录。写操作默认关闭，授权批次在自己的进程内开启。Steam 更新后应先检查读取与预演结果。
 
 Steam MCP 基于 [sjmatta/steam-mcp](https://github.com/sjmatta/steam-mcp)，包含 Windows 适配和批量分类脚本；上游署名及许可证保存在 steam-mcp/LICENSE。
+
+## 许可证
+
+Copyright (C) 2026 BW1145.
+
+本项目的原创代码与文档采用 GNU General Public License v3.0 only（SPDX：`GPL-3.0-only`）许可，完整条款见 [LICENSE](LICENSE)。
+
+第三方代码、依赖及资源继续适用各自的许可证；其原有版权声明和许可条款保持有效。
+
+`steam-mcp/` 中源自 [sjmatta/steam-mcp](https://github.com/sjmatta/steam-mcp) 的上游代码保留 MIT 许可，版权声明与完整条款见 [steam-mcp/LICENSE](steam-mcp/LICENSE)。本仓库由 BW1145 编写的工作流、脚本及修改部分适用上述 GPL-3.0-only；此声明不改变上游代码原有的 MIT 授权。
